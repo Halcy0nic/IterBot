@@ -6,9 +6,34 @@ from IterBotTools import TimeTool, get_default_tools
 
 # System prompt to guide ReAct behavior
 class IterBotReactAgent:
-    """A ReAct (Reasoning and Acting) agent that uses Ollama for inference."""
+    """
+    A ReAct (Reasoning and Acting) agent that uses Ollama for inference.
     
-    def __init__(self, model='llama3.2', tools=None, max_iterations=15):
+    This agent follows the ReAct paradigm, using a structured approach of Thought -> Action -> Observation
+    cycles to solve problems step by step. The agent can use various tools and maintains the core ReAct
+    functionality while allowing for custom system prompt additions.
+    
+    Features:
+    - ReAct reasoning pattern with tool integration
+    - Customizable system prompts with size limits
+    - Dynamic tool management
+    - Loop detection and iteration limits
+    
+    Example:
+        # Basic usage
+        agent = IterBotReactAgent()
+        
+        # With custom system prompt
+        agent = IterBotReactAgent(
+            custom_system_prompt="You are an expert in data analysis. Always show your work.",
+            max_custom_prompt_size=300
+        )
+        
+        # Run the agent
+        result = agent.run("What time is it?")
+    """
+    
+    def __init__(self, model='llama3.2', tools=None, max_iterations=15, custom_system_prompt=None, max_custom_prompt_size=500):
         """
         Initialize the ReAct agent.
         
@@ -16,16 +41,20 @@ class IterBotReactAgent:
             model (str): The Ollama model to use
             tools (dict): Dictionary of available tools {name: function}
             max_iterations (int): Maximum number of reasoning iterations
+            custom_system_prompt (str, optional): Additional system prompt to append to the ReAct prompt
+            max_custom_prompt_size (int): Maximum character length for custom system prompt (default: 500)
         """
         self.model = model
         self.tools = tools if tools is not None else get_default_tools()
         self.max_iterations = max_iterations
+        self.custom_system_prompt = self._validate_custom_prompt(custom_system_prompt, max_custom_prompt_size)
+        self.max_custom_prompt_size = max_custom_prompt_size
         
         # Generate system prompt based on available tools
         self.system_prompt = self._generate_system_prompt()
     
     def _generate_system_prompt(self):
-        """Generate system prompt based on available tools."""
+        """Generate system prompt based on available tools and optional custom prompt."""
         tool_descriptions = []
         for i, (tool_name, tool_func) in enumerate(self.tools.items(), 1):
             # Extract function signature for documentation
@@ -34,7 +63,9 @@ class IterBotReactAgent:
             tool_descriptions.append(f"{i}. {tool_name}{sig}")
         
         tools_text = "\n".join(tool_descriptions)
-        system_prompt = f"""You are a reasoning agent. You can use tools to solve problems step by step.
+        
+        # Base ReAct system prompt (unchanged)
+        base_prompt = f"""You are a reasoning agent. You can use tools to solve problems step by step.
         Available tools:
         {tools_text}
 
@@ -50,10 +81,46 @@ class IterBotReactAgent:
         When you have enough information, output:
         Final Answer: [your final answer to the user]
 
-        Never generate fake Observations. Only output Thought and Action, then wait.
-        """
+        Never generate fake Observations. Only output Thought and Action, then wait."""
+        
+        # Append custom system prompt if provided
+        if self.custom_system_prompt:
+            system_prompt = f"{base_prompt}\n\nAdditional instructions:\n{self.custom_system_prompt}"
+        else:
+            system_prompt = base_prompt
+            
         return system_prompt
 
+    def _validate_custom_prompt(self, custom_prompt, max_size):
+        """
+        Validate and truncate custom system prompt if necessary.
+        
+        Args:
+            custom_prompt (str): The custom system prompt to validate
+            max_size (int): Maximum allowed character length
+            
+        Returns:
+            str or None: Validated custom prompt or None if invalid/empty
+        """
+        if not custom_prompt:
+            return None
+            
+        # Strip whitespace and validate
+        custom_prompt = custom_prompt.strip()
+        if not custom_prompt:
+            return None
+            
+        # Truncate if necessary
+        if len(custom_prompt) > max_size:
+            custom_prompt = custom_prompt[:max_size].strip()
+            # Try to truncate at a word boundary if possible
+            if ' ' in custom_prompt:
+                last_space = custom_prompt.rfind(' ')
+                if last_space > max_size * 0.8:  # Only if we don't lose too much
+                    custom_prompt = custom_prompt[:last_space]
+                    
+        return custom_prompt
+    
     def _is_final_answer(self, content):
         """Detect if the agent has produced a final answer."""
         return bool(re.search(r"Final Answer\s*:", content, re.IGNORECASE))
@@ -168,3 +235,27 @@ class IterBotReactAgent:
     def list_tools(self):
         """List all available tools."""
         return list(self.tools.keys())
+    
+    def update_custom_system_prompt(self, custom_prompt):
+        """
+        Update the custom system prompt.
+        
+        Args:
+            custom_prompt (str): New custom system prompt to append to the ReAct prompt
+        """
+        self.custom_system_prompt = self._validate_custom_prompt(custom_prompt, self.max_custom_prompt_size)
+        self.system_prompt = self._generate_system_prompt()
+    
+    def get_custom_system_prompt(self):
+        """
+        Get the current custom system prompt.
+        
+        Returns:
+            str or None: The current custom system prompt
+        """
+        return self.custom_system_prompt
+    
+    def remove_custom_system_prompt(self):
+        """Remove the custom system prompt, reverting to default ReAct behavior."""
+        self.custom_system_prompt = None
+        self.system_prompt = self._generate_system_prompt()
